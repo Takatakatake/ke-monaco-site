@@ -1,8 +1,8 @@
 // CodeMirror 6 minimal editor with Kanji Esperanto completions
-import {EditorState} from 'https://esm.sh/@codemirror/state@6.4.1';
-import {EditorView, keymap} from 'https://esm.sh/@codemirror/view@6.34.1';
-import {defaultKeymap, history, historyKeymap} from 'https://esm.sh/@codemirror/commands@6.5.0';
-import {autocompletion, startCompletion, closeCompletion, completionKeymap} from 'https://esm.sh/@codemirror/autocomplete@6.13.3';
+import {EditorState} from 'https://esm.sh/@codemirror/state@6.4.1?bundle';
+import {EditorView, keymap} from 'https://esm.sh/@codemirror/view@6.34.1?bundle';
+import {defaultKeymap, history, historyKeymap} from 'https://esm.sh/@codemirror/commands@6.5.0?bundle';
+import {autocompletion, startCompletion, closeCompletion, completionKeymap} from 'https://esm.sh/@codemirror/autocomplete@6.13.3?bundle';
 
 const STORAGE_KEY = 'ke-cm-doc-v1';
 const HISTORY_KEY  = 'ke-cm-hist-v1';
@@ -55,7 +55,12 @@ function extractPrefix(state, pos){
   return {raw, norm, from};
 }
 
-const dict = await loadDictionary();
+// Older browsers may not support top-level await reliably; load dictionary in background.
+let dict = { items: [], buckets: new Map() };
+(async () => {
+  try { dict = await loadDictionary(); }
+  catch (e) { console.error('[KE CM] Failed to load dictionary', e); }
+})();
 
 // Completion source
 function keComplete(ctx){
@@ -114,36 +119,42 @@ const autoTrigger = EditorView.updateListener.of(update => {
 let initial = 'Kiam Okcidento renkontas Orienton kaj surmetis orientan vestaĵon, unu lingvo nun havas du aspektons - ambaŭ belaj, nova kompreno naskiĝas.\n何时 西o 遇as 东方on 和 上置is 东方an 服物on, 一 语o 今 有as 二 观ojn - 两 美aj, 新a 懂o 生成as.\n';
 try { initial = localStorage.getItem(STORAGE_KEY) || initial; } catch {}
 
-const view = new EditorView({
-  state: EditorState.create({
-    doc: initial,
-    extensions: [
-      history(),
-      keymap.of([
-        ...defaultKeymap,
-        ...historyKeymap,
-        ...completionKeymap,
-        { key: 'Mod-Alt-r', run: (view)=>{
-            try {
-              const hist = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
-              const last = hist[hist.length - 1];
-              if (last && typeof last.v === 'string') {
-                view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: last.v}});
-                return true;
-              }
-            } catch {}
-            return false;
-          }
-        },
-        { key: 'Mod-Alt-Backspace', run: ()=>{ try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(HISTORY_KEY);} catch{} return true; } }
-      ]),
-      autocompletion({override: [keComplete], defaultKeymap: true, activateOnTyping: true}),
-      autoTrigger,
-      buildPersistence()
-    ]
-  }),
-  parent: document.getElementById('editor')
-});
-
-// Focus the editor for immediate typing
-setTimeout(()=> view.focus(), 0);
+const parent = document.getElementById('editor');
+let view;
+try {
+  view = new EditorView({
+    state: EditorState.create({
+      doc: initial,
+      extensions: [
+        history(),
+        keymap.of([
+          ...defaultKeymap,
+          ...historyKeymap,
+          ...completionKeymap,
+          { key: 'Mod-Alt-r', run: (view)=>{
+              try {
+                const hist = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+                const last = hist[hist.length - 1];
+                if (last && typeof last.v === 'string') {
+                  view.dispatch({changes: {from: 0, to: view.state.doc.length, insert: last.v}});
+                  return true;
+                }
+              } catch {}
+              return false;
+            }
+          },
+          { key: 'Mod-Alt-Backspace', run: ()=>{ try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(HISTORY_KEY);} catch{} return true; } }
+        ]),
+        autocompletion({override: [keComplete], defaultKeymap: true, activateOnTyping: true}),
+        autoTrigger,
+        buildPersistence()
+      ]
+    }),
+    parent
+  });
+  // Focus the editor for immediate typing (may be ignored by some browsers until user interaction)
+  setTimeout(()=> { try{ view.focus(); } catch{} }, 0);
+} catch (e) {
+  console.error('[KE CM] failed to initialize editor', e);
+  if (parent) parent.textContent = 'Editor failed to initialize. Please check console logs and network access.';
+}
