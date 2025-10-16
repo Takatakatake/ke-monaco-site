@@ -18,6 +18,7 @@ require(['vs/editor/editor.main'], function () {
   const STORAGE_KEY = `ke-doc-v1:${location.pathname}`;
   const HISTORY_KEY = `ke-doc-hist-v1:${location.pathname}`;
   const HISTORY_LIMIT = 50;
+  let lastCompletionSnapshot = { prefix: '', fingerprint: '', timestamp: 0 };
 
   async function loadBucket(ch) {
     const key = (ch || '').toLowerCase();
@@ -100,6 +101,16 @@ require(['vs/editor/editor.main'], function () {
     return Promise.all(letters.map(ch => loadBucket(ch)));
   }
 
+  function finalizeItems(prefix, items) {
+    const exact = items.filter(i => i.label && String(i.label).startsWith(prefix + ' '));
+    return exact.length ? exact : items;
+  }
+
+  function fingerprintItems(prefix, items) {
+    const head = items.slice(0, 5).map(i => String(i.label)).join('||');
+    return `${prefix}|${items.length}|${head}`;
+  }
+
   function registerProvider() {
     monaco.languages.registerCompletionItemProvider('kanji-esperanto', {
       // 通常入力（a-z）でも補完を自動発火させる
@@ -109,13 +120,9 @@ require(['vs/editor/editor.main'], function () {
         const line = model.getLineContent(position.lineNumber);
         const col0 = position.column - 1; // 0-based caret index
         const prefix = extractAsciiPrefix(line, col0);
-        // デバッグ: 一時的にコンソールログを追加
-        console.log('[KE] prefix:', prefix, 'line:', line, 'col:', col0);
         if (!prefix || prefix.length < 1) return { suggestions: [] }; // 1文字以上で候補
         let items = await buildItemsForPrefix(prefix, position, col0);
-        // exact match がある場合はそれだけに限定（ローカル神仕様に寄せる）
-        const exact = items.filter(i => i.label && String(i.label).startsWith(prefix + ' '));
-        if (exact.length) items = exact;
+        items = finalizeItems(prefix, items);
         // レース防止: 返却直前のプレフィクスが当初と異なる場合は結果を捨てる
         try {
           if (token && token.isCancellationRequested) return { suggestions: [] };
@@ -126,9 +133,10 @@ require(['vs/editor/editor.main'], function () {
         if (!items.length && inflight.has(prefix[0].toLowerCase())) {
           try { await inflight.get(prefix[0].toLowerCase()); } catch { }
           items = await buildItemsForPrefix(prefix, position, col0);
-          const exact2 = items.filter(i => i.label && String(i.label).startsWith(prefix + ' '));
-          if (exact2.length) items = exact2;
+          items = finalizeItems(prefix, items);
         }
+        const fingerprint = fingerprintItems(prefix, items);
+        lastCompletionSnapshot = { prefix, fingerprint, timestamp: Date.now() };
         return { suggestions: items };
       }
     });
@@ -239,7 +247,7 @@ require(['vs/editor/editor.main'], function () {
       hideSuggest();
       return;
     }
-    // a-zが入力された場合のみ候補を表示
+    // a-zが入力された場合のみ候補を表示（不要な再計算を避ける）
     try {
       const model = editor.getModel();
       const pos = editor.getPosition();
@@ -248,11 +256,34 @@ require(['vs/editor/editor.main'], function () {
       const prefix = extractAsciiPrefix(line, col0);
       if (!prefix) { hideSuggest(); return; }
       const maybe = loadBucket(prefix[0]);
-      Promise.resolve(maybe).then(() => {
-        // 一度候補を閉じてから再度開く（Monaco Editorの再計算を強制）
-        hideSuggest();
-        setTimeout(() => editor.trigger('ke', 'editor.action.triggerSuggest', {}), 10);
-      });
+      Promise.resolve(maybe)
+        .then(async () => {
+          let shouldRetrigger = true;
+          try {
+            const curModel = editor.getModel();
+            const curPos = editor.getPosition();
+            if (!curModel || !curPos) return;
+            const curCol0 = curPos.column - 1;
+            const curLine = curModel.getLineContent(curPos.lineNumber);
+            const curPrefix = extractAsciiPrefix(curLine, curCol0);
+            if (curPrefix !== prefix) return;
+            let projected = await buildItemsForPrefix(prefix, curPos, curCol0);
+            projected = finalizeItems(prefix, projected);
+            const fingerprint = fingerprintItems(prefix, projected);
+            if (lastCompletionSnapshot.prefix === prefix && lastCompletionSnapshot.fingerprint === fingerprint) {
+              shouldRetrigger = false;
+            }
+          } catch {
+            shouldRetrigger = true;
+          }
+          if (!shouldRetrigger) return;
+          hideSuggest();
+          setTimeout(() => editor.trigger('ke', 'editor.action.triggerSuggest', {}), 10);
+        })
+        .catch(() => {
+          hideSuggest();
+          setTimeout(() => editor.trigger('ke', 'editor.action.triggerSuggest', {}), 10);
+        });
     } catch {
       // fallback trigger（失敗時は閉じるより提示を優先）
       hideSuggest();
@@ -260,4 +291,128 @@ require(['vs/editor/editor.main'], function () {
     }
   });
   // 変更イベントでの自動サジェストは行わない
+
+  // === Mobile-friendly Clipboard & Utility Toolbar ===
+  (function setupMobileToolbar(){
+    const toastEl = document.getElementById('ke-toast');
+    const showToast = (msg) => {
+      if (!toastEl) { return; }
+      toastEl.textContent = msg;
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => { toastEl.textContent = ''; }, 1800);
+    };
+
+    const appRoot = document.getElementById('app');
+    const plain = document.createElement('textarea');
+    plain.id = 'ke-plain';
+    plain.style.display = 'none';
+    plain.style.width = '100%';
+    plain.style.height = '100%';
+    plain.style.boxSizing = 'border-box';
+    plain.style.fontFamily = 'monospace';
+    plain.style.fontSize = '16px';
+    plain.style.padding = '10px';
+    appRoot.appendChild(plain);
+
+    function switchToPlain() {
+      try { plain.value = editor.getValue(); } catch {}
+      host.style.display = 'none';
+      plain.style.display = 'block';
+      plain.focus();
+      showToast('テキストエリアに切替（長押しでコピペ可）');
+    }
+    function switchToMonaco() {
+      try { editor.setValue(plain.value); saveNow(); } catch {}
+      plain.style.display = 'none';
+      host.style.display = 'block';
+      editor.focus();
+      showToast('Monacoに戻りました');
+    }
+    let plainMode = false;
+
+    async function copySelectionOrAll() {
+      try {
+        const model = editor.getModel();
+        const sel = editor.getSelection();
+        let text = '';
+        if (sel && !sel.isEmpty()) {
+          text = model.getValueInRange(sel);
+        } else {
+          text = model.getValue();
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          showToast('コピーしました');
+          return;
+        }
+      } catch {}
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = editor.getModel().getValue();
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('コピーしました（フォールバック）');
+      } catch {
+        showToast('コピーに失敗しました');
+      }
+    }
+
+    async function pasteFromClipboard() {
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          const text = await navigator.clipboard.readText();
+          if (text) {
+            const sel = editor.getSelection();
+            editor.executeEdits('ke-paste', [{ range: sel, text, forceMoveMarkers: true }]);
+            editor.focus();
+            showToast('ペーストしました');
+            return;
+          }
+        }
+      } catch {}
+      const fallback = window.prompt('クリップボード読み取り不可です。ここに貼り付けてください：', '');
+      if (fallback != null) {
+        const sel = editor.getSelection();
+        editor.executeEdits('ke-paste', [{ range: sel, text: String(fallback), forceMoveMarkers: true }]);
+        editor.focus();
+        showToast('ペーストしました');
+      }
+    }
+
+    function selectAll() {
+      try { editor.trigger('ke', 'editor.action.selectAll'); editor.focus(); showToast('全選択しました'); } catch {}
+    }
+
+    async function shareSelectionOrAll() {
+      try {
+        const model = editor.getModel();
+        const sel = editor.getSelection();
+        const text = (sel && !sel.isEmpty()) ? model.getValueInRange(sel) : model.getValue();
+        if (navigator.share && text) {
+          const snippet = text.length > 10000 ? text.slice(0, 10000) + '\n…' : text;
+          await navigator.share({ text: snippet, title: 'Kanji Esperanto Text' });
+          return;
+        }
+      } catch {}
+      copySelectionOrAll();
+    }
+
+    const byId = (id) => document.getElementById(id);
+    const wire = (id, fn) => { const el = byId(id); if (el) el.addEventListener('click', fn, { passive: true }); };
+    wire('btn-copy', () => copySelectionOrAll());
+    wire('btn-paste', () => pasteFromClipboard());
+    wire('btn-select-all', () => selectAll());
+    wire('btn-share', () => shareSelectionOrAll());
+    wire('btn-plain-toggle', () => {
+      plainMode = !plainMode;
+      const btn = document.getElementById('btn-plain-toggle');
+      if (plainMode) { switchToPlain(); btn && (btn.textContent = 'Monacoに戻る'); }
+      else { switchToMonaco(); btn && (btn.textContent = 'シンプル編集'); }
+    });
+  })();
+  // === End of Mobile-friendly Toolbar ===
 });

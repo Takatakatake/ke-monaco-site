@@ -2,16 +2,25 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Kanji Esperanto Editor (Monaco)</title>
   <meta name="description" content="Kanji Esperanto input demo using Monaco Editor" />
   <style>
     html, body, #app { height: 100%; margin: 0; }
-    #app { display: grid; grid-template-rows: 56px 1fr; }
-    header { display:flex; align-items:center; gap:12px; padding:8px 16px; border-bottom:1px solid #ddd; }
+    #app { display: grid; grid-template-rows: auto 1fr; }
+    header {
+      position: sticky; top: 0; z-index: 1000;
+      display:flex; align-items:center; gap:12px; padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 8px;
+      border-bottom:1px solid #ddd; flex-wrap: wrap; background:#fff;
+    }
     header strong { font-size: 16px; }
     .hint { font-size: 12px; color: #666; }
+    .toolbar { display:flex; gap:8px; flex-wrap: wrap; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .toolbar button { font-size: 12px; padding:6px 10px; border:1px solid #ccc; background:#f8f8f8; border-radius:6px; }
+    .toolbar button:active { background:#eee; }
+    .toast { font-size: 12px; color:#0a7; margin-left: auto; white-space: nowrap; }
     #editor { height: 100%; }
+    #ke-plain { grid-row: 2; grid-column: 1; }
     footer { font-size: 12px; color:#666; padding: 8px 16px; border-top: 1px solid #eee; }
   </style>
   <script>
@@ -30,7 +39,15 @@
   <div id="app">
     <header>
       <strong>Kanji Esperanto Editor</strong>
-      <span class="hint">例：初期文は2行の見本文です（Ctrl+Spaceで候補表示）</span>
+      <span class="hint">スマホは上のボタンでコピペ可能</span>
+      <div class="toolbar">
+        <button id="btn-copy" type="button">コピー</button>
+        <button id="btn-paste" type="button">ペースト</button>
+        <button id="btn-select-all" type="button">全選択</button>
+        <button id="btn-share" type="button">共有</button>
+        <button id="btn-plain-toggle" type="button">シンプル編集</button>
+      </div>
+      <span id="ke-toast" class="toast" aria-live="polite"></span>
     </header>
     <div id="editor" data-options='{"wordBasedSuggestions":false,"quickSuggestions":{"other":false,"comments":false,"strings":false},"quickSuggestionsDelay":10,"suggest":{"showSnippets":true,"showWords":false}}'></div>
   </div>
