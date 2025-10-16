@@ -15,8 +15,8 @@ require(['vs/editor/editor.main'], function () {
   const SUGGEST_LIMIT = 100;
   const params = new URLSearchParams(location.search);
   const STRICT = params.get('strict') === '1';
-  const STORAGE_KEY = 'ke-doc-v1';
-  const HISTORY_KEY = 'ke-doc-hist-v1';
+  const STORAGE_KEY = `ke-doc-v1:${location.pathname}`;
+  const HISTORY_KEY = `ke-doc-hist-v1:${location.pathname}`;
   const HISTORY_LIMIT = 50;
 
   async function loadBucket(ch) {
@@ -121,10 +121,10 @@ require(['vs/editor/editor.main'], function () {
           if (token && token.isCancellationRequested) return { suggestions: [] };
           const nowPrefix = currentPrefix(model, editor.getPosition());
           if (nowPrefix !== prefix) return { suggestions: [] };
-        } catch {}
+        } catch { }
         // まれに辞書ロードの直後で空になる揺らぎに対応（1回だけ待って再試行）
         if (!items.length && inflight.has(prefix[0].toLowerCase())) {
-          try { await inflight.get(prefix[0].toLowerCase()); } catch {}
+          try { await inflight.get(prefix[0].toLowerCase()); } catch { }
           items = await buildItemsForPrefix(prefix, position, col0);
           const exact2 = items.filter(i => i.label && String(i.label).startsWith(prefix + ' '));
           if (exact2.length) items = exact2;
@@ -137,10 +137,10 @@ require(['vs/editor/editor.main'], function () {
   // エディタ作成
   const host = document.getElementById('editor');
   let extraOpts = {};
-  try { extraOpts = JSON.parse(host.getAttribute('data-options') || '{}'); } catch {}
+  try { extraOpts = JSON.parse(host.getAttribute('data-options') || '{}'); } catch { }
   // 直前の内容を復元（ローカル保存）
   let saved = null;
-  try { saved = localStorage.getItem(STORAGE_KEY); } catch {}
+  try { saved = localStorage.getItem(STORAGE_KEY); } catch { }
 
   const editor = monaco.editor.create(host, Object.assign({
     value: saved || 'Kiam Okcidento renkontas Orienton kaj surmetis orientan vestaĵon, unu lingvo nun havas du aspektons - ambaŭ belaj, nova kompreno naskiĝas.\n何时 西o 遇as 东方on 和 上置is 东方an 服物on, 一 语o 今 有as 二 观ojn - 两 美aj, 新a 懂o 生成as.\n',
@@ -167,14 +167,14 @@ require(['vs/editor/editor.main'], function () {
       const v = editor.getValue();
       localStorage.setItem(STORAGE_KEY, v);
       let hist = [];
-      try { hist = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch {}
+      try { hist = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch { }
       const last = hist[hist.length - 1];
       if (!last || last.v !== v) {
         hist.push({ t: Date.now(), v });
         if (hist.length > HISTORY_LIMIT) hist = hist.slice(-HISTORY_LIMIT);
         localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
       }
-    } catch {}
+    } catch { }
   };
   const saveDebounced = debounce(saveNow, 300);
   editor.onDidChangeModelContent(saveDebounced);
@@ -191,7 +191,7 @@ require(['vs/editor/editor.main'], function () {
           editor.setValue(last.v);
           localStorage.setItem(STORAGE_KEY, last.v);
         }
-      } catch {}
+      } catch { }
     }
   });
 
@@ -200,18 +200,18 @@ require(['vs/editor/editor.main'], function () {
     label: 'KE: Clear Local Storage',
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Backspace],
     run: () => {
-      try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(HISTORY_KEY); } catch {}
+      try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(HISTORY_KEY); } catch { }
     }
   });
 
   function hideSuggest() {
     try {
       editor.trigger('ke', 'hideSuggestWidget', {});
-    } catch {}
+    } catch { }
     try {
       const c = editor.getContribution && editor.getContribution('editor.contrib.suggestController');
       if (c && typeof c.cancel === 'function') c.cancel();
-    } catch {}
+    } catch { }
   }
 
   // strict モードは全データ読込後に補完プロバイダを登録（初回から決定的）
